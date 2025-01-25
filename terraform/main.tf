@@ -29,7 +29,7 @@ resource "aws_security_group" "app_sg" {
 }
 
 resource "aws_instance" "app_server" {
-  ami           = "ami-0c55b159cbfafe1f0" 
+  ami           = "ami-04b4f1a9cf54c11d0" 
   instance_type = var.instance_type
   key_name      = "github-actions-key"    
   security_groups = [aws_security_group.app_sg.name]
