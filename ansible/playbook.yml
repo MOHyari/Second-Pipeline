@@ -1,0 +1,30 @@
+---
+- name: Deploy FrontEnd
+  hosts: all
+  become: yes
+  vars:
+    docker_image: "my-frontend-app:latest"
+
+  tasks:
+  - name: Install Docker
+    apt:
+      name: docker.io
+      state: present
+      update_cache: yes
+
+  - name: Copy frontend files to EC2
+    ansible.builtin.copy:
+      src: "../frontend"
+      dest: "/home/ubuntu/frontend"
+  - name: Copy Dockerfiles to EC2
+    ansible.builtin.copy:
+      src: "../docker/"
+      dest: "/home/ubuntu/docker"
+  - name: Run Docker Container
+    community.docker.docker_container:
+      name: "frontend"
+      image: "{{ docker_image }}"
+      ports:
+      - "80:80"
+      restart_policy: unless-stopped
+      state: started
