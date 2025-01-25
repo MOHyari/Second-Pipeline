@@ -1,4 +1,4 @@
-name: Secure DevOps Pipeline
+name: DevOps Pipeline
 
 on:
   push:
@@ -9,16 +9,26 @@ jobs:
     name: Terraform Apply
     runs-on: ubuntu-latest
     steps:
+      # Step 1: Checkout code from the repository
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetches all branch history (useful for Terraform state)
 
+      # Step 2: Install Terraform CLI
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: latest  # Always use the latest stable version
 
+      # Step 3: Initialize Terraform configuration
       - name: Terraform Init
         run: terraform init -no-color
         working-directory: ./terraform
+        env:
+          TF_INPUT: false  # Disable interactive prompts
 
+      # Step 4: Provision AWS infrastructure (EC2, security groups, etc.)
       - name: Terraform Apply
         run: terraform apply -auto-approve -no-color
         working-directory: ./terraform
@@ -27,41 +37,68 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
   ansible:
-    needs: terraform
+    needs: terraform  # Wait for Terraform job to complete
     runs-on: ubuntu-latest
     steps:
+      # Step 1: Checkout code to access Ansible playbooks and frontend files
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Step 2: Configure SSH key for EC2 access
       - name: Configure SSH Key
         run: |
           mkdir -p ~/.ssh/
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa  # Load SSH key from secrets
+          chmod 600 ~/.ssh/id_rsa  # Restrict key permissions
 
+      # Step 3: Fetch EC2 IP using AWS CLI (avoids Terraform outputs)
       - name: Get EC2 IP via AWS CLI
-        id: get-ec2-ip
+        id: get-ec2-ip  # ID for referencing this step's output
         run: |
+          sleep 30  # Wait for EC2 to fully initialize
+          # Query AWS for the instance IP using tags and state filters
           EC2_IP=$(aws ec2 describe-instances \
             --filters "Name=tag:Name,Values=DevOps-Pipeline-Server" \
-            --query "Reservations[0].Instances[0].PublicIpAddress" \
+                      "Name=instance-state-name,Values=running" \
+            --query "Reservations[].Instances[].PublicIpAddress" \
             --output text)
+          
+          # Fail if IP is empty
+          if [ -z "$EC2_IP" ]; then
+            echo "ERROR: EC2 IP not found!"
+            exit 1
+          fi
+          
+          # Save IP to GitHub Actions outputs
           echo "EC2_IP=$EC2_IP" >> $GITHUB_OUTPUT
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: "us-east-1"
 
+      # Step 4: Test SSH connectivity before proceeding
+      - name: Test SSH Connection
+        run: |
+          # Add EC2 IP to known hosts to avoid prompts
+          ssh-keyscan ${{ steps.get-ec2-ip.outputs.EC2_IP }} >> ~/.ssh/known_hosts
+          # Execute a test command on the EC2 instance
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ steps.get-ec2-ip.outputs.EC2_IP }} "echo 'SSH connection successful!'"
+
+      # Step 5: Copy frontend files and Docker config to EC2
       - name: Copy Files to EC2
         uses: appleboy/scp-action@master
-        if: ${{ steps.get-ec2-ip.outputs.EC2_IP != '' }}
+        if: ${{ steps.get-ec2-ip.outputs.EC2_IP != '' }}  # Only run if IP is valid
         with:
-          host: ${{ steps.get-ec2-ip.outputs.EC2_IP }}
-          username: ubuntu
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "frontend/,docker/"
-          target: "/home/ubuntu/"
+          host: ${{ steps.get-ec2-ip.outputs.EC2_IP }}  # EC2 IP from previous step
+          username: ubuntu  # Default user for Ubuntu AMIs
+          key: ${{ secrets.SSH_PRIVATE_KEY }}  # SSH key from secrets
+          source: "frontend/,docker/"  # Folders to copy
+          target: "/home/ubuntu/"  # Destination on EC2
+          strip_components: 1  # Remove parent directory from tar extraction
 
+      # Step 6: Run Ansible playbook to configure Docker and deploy the app
       - name: Run Ansible Playbook
         working-directory: ./ansible
         run: ansible-playbook -i ${{ steps.get-ec2-ip.outputs.EC2_IP }}, playbook.yml --user ubuntu
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"  # Disable SSH host key verification
