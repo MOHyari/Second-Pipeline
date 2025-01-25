@@ -54,6 +54,7 @@ jobs:
 
       - name: Copy Files to EC2
         uses: appleboy/scp-action@master
+        if: ${{ steps.get-ec2-ip.outputs.EC2_IP != '' }}
         with:
           host: ${{ steps.get-ec2-ip.outputs.EC2_IP }}
           username: ubuntu
