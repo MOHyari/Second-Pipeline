@@ -33,22 +33,24 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
       # Step 5: Save the EC2 IP to a file for Ansible
-      - name: Save EC2 IP
+      - name: Save EC2 IP (Securely)
         working-directory: ./terraform
-        run: terraform output -raw ec2_public_ip > ../ansible/inventory.ini
-      - name: Save EC2 IP
-        working-directory: ./terraform
+        id: save-ec2-ip
         run: |
+          # Extract IP without printing it
           EC2_IP=$(terraform output -raw ec2_public_ip)
-          echo "EC2_IP=$EC2_IP" >> $GITHUB_OUTPUT  # Set output variable
-
-    outputs:
-      ec2_public_ip: ${{ steps.terraform-apply.outputs.EC2_IP }}  # Reference the output
+          echo "EC2_IP=$EC2_IP" >> $GITHUB_OUTPUT
+        env:
+          # Suppress Terraform warnings about sensitive outputs
+          TF_IN_AUTOMATION: true
+  
 
   ansible:
     name: Ansible Configuration
     needs: terraform  
     runs-on: ubuntu-latest
+    env:
+      EC2_IP: ${{ needs.terraform.outputs.ec2_public_ip }}  # Injected as env variable
 
     steps:
       # Step 1: Checkout code (to access Ansible playbook and frontend files)
@@ -75,3 +77,5 @@ jobs:
       - name: Run Ansible Playbook
         working-directory: ./ansible
         run: ansible-playbook -i inventory.ini playbook.yml --user ubuntu
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"  # Disable host key checking

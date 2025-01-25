@@ -26,5 +26,6 @@
       image: "{{ docker_image }}"
       ports:
       - "80:80"
+      no_log: true  # Prevent logging task details
       restart_policy: unless-stopped
       state: started
